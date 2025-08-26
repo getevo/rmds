@@ -1,0 +1,434 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/getevo/rmds"
+	"github.com/gorilla/websocket"
+)
+
+var (
+	nodeID  = flag.String("node_id", "", "Node ID for this instance")
+	mode    = flag.String("mode", "rw", "Mode: writer, reader, or rw")
+	channel = flag.String("channel", "chat", "Channel name")
+	nats    = flag.String("nats", "localhost:4222", "NATS server address")
+	webPort = flag.Int("web", 8080, "Web server port (0 to disable)")
+	debug   = flag.Bool("debug", false, "Enable debug mode")
+)
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+type ChatMessage struct {
+	Type      string    `json:"type"`
+	NodeID    string    `json:"node_id"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type WebSocketHub struct {
+	clients    map[*websocket.Conn]bool
+	broadcast  chan []byte
+	register   chan *websocket.Conn
+	unregister chan *websocket.Conn
+}
+
+var hub = &WebSocketHub{
+	clients:    make(map[*websocket.Conn]bool),
+	broadcast:  make(chan []byte),
+	register:   make(chan *websocket.Conn),
+	unregister: make(chan *websocket.Conn),
+}
+
+func main() {
+	flag.Parse()
+
+	if *nodeID == "" {
+		fmt.Println("Error: node_id is required")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	config := rmds.DefaultConfig()
+	config.NATSServers = []string{fmt.Sprintf("nats://%s", *nats)}
+	config.NodeID = *nodeID
+	config.StoragePath = fmt.Sprintf("%s.db", *nodeID)
+
+	conn, err := rmds.New(config)
+	if err != nil {
+		log.Fatalf("Failed to create RMDS connection: %v", err)
+	}
+	defer conn.Unsubscribe()
+
+	var channelMode rmds.ChannelMode
+	switch *mode {
+	case "writer":
+		channelMode = rmds.WriteOnly
+	case "reader":
+		channelMode = rmds.ReadOnly
+	case "rw":
+		channelMode = rmds.RW
+	default:
+		log.Fatalf("Invalid mode: %s", *mode)
+	}
+
+	ch := conn.Join(*channel, channelMode)
+
+	if channelMode == rmds.ReadOnly || channelMode == rmds.RW {
+		ch.OnMessage(func(msg *rmds.Message) {
+			fmt.Printf("[RMDS DEBUG] Received RMDS message from %s: %s\n", msg.Sender, string(msg.Data))
+			var chatMsg ChatMessage
+			if err := json.Unmarshal(msg.Data, &chatMsg); err == nil {
+				fmt.Printf("\n[%s] %s: %s\n> ", chatMsg.Timestamp.Format("15:04:05"), chatMsg.NodeID, chatMsg.Text)
+
+				if *webPort > 0 {
+					webMsg, _ := json.Marshal(chatMsg)
+					fmt.Printf("[WEB DEBUG] Broadcasting message to %d clients\n", len(hub.clients))
+					hub.broadcast <- webMsg
+				}
+			} else {
+				fmt.Printf("[RMDS DEBUG] Failed to unmarshal received message: %v\n", err)
+			}
+		})
+	}
+
+	if *webPort > 0 {
+		go hub.run()
+		go startWebServer(conn, ch, channelMode)
+	}
+
+	if *debug {
+		go debugLoop(conn)
+	}
+
+	fmt.Printf("Node %s connected to channel %s in %s mode\n", *nodeID, *channel, *mode)
+	fmt.Printf("Connected to NATS at %s\n", *nats)
+	if *webPort > 0 {
+		fmt.Printf("Web UI available at http://localhost:%d\n", *webPort)
+	}
+	fmt.Println("Type messages to send, or commands:")
+	fmt.Println("  /stats - Show statistics")
+	fmt.Println("  /nodes - Show connected nodes")
+	fmt.Println("  /topology - Show network topology")
+	fmt.Println("  /quit - Exit")
+	fmt.Println("")
+
+	// Only run the console input loop if web server is disabled
+	if *webPort <= 0 {
+		reader := bufio.NewReader(os.Stdin)
+		for {
+			fmt.Print("> ")
+			text, _ := reader.ReadString('\n')
+			text = strings.TrimSpace(text)
+
+			if text == "" {
+				continue
+			}
+
+			if strings.HasPrefix(text, "/") {
+				handleCommand(conn, text)
+				continue
+			}
+
+			if channelMode == rmds.WriteOnly || channelMode == rmds.RW {
+				chatMsg := ChatMessage{
+					Type:      "message",
+					NodeID:    *nodeID,
+					Text:      text,
+					Timestamp: time.Now(),
+				}
+
+				if err := ch.SendMessage(chatMsg); err != nil {
+					fmt.Printf("Error sending message: %v\n", err)
+				} else {
+					fmt.Printf("Message sent: %s\n", text)
+				}
+			} else {
+				fmt.Println("Cannot send messages in reader mode")
+			}
+		}
+	} else {
+		// Keep the application running when web server is enabled
+		select {}
+	}
+}
+
+func handleCommand(conn *rmds.Connection, cmd string) {
+	switch cmd {
+	case "/stats":
+		stats := conn.Mgmt.Statistic()
+		fmt.Println("\nStatistics:")
+		for key, value := range stats {
+			fmt.Printf("  %s: %d\n", key, value)
+		}
+	case "/nodes":
+		nodes := conn.Mgmt.Nodes()
+		fmt.Println("\nConnected Nodes:")
+		for _, node := range nodes {
+			fmt.Printf("  - %s\n", node)
+		}
+	case "/topology":
+		topology := conn.Mgmt.Topology()
+		data, _ := json.MarshalIndent(topology, "", "  ")
+		fmt.Printf("\nNetwork Topology:\n%s\n", string(data))
+	case "/quit":
+		os.Exit(0)
+	default:
+		fmt.Printf("Unknown command: %s\n", cmd)
+	}
+}
+
+func debugLoop(conn *rmds.Connection) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		stats := conn.Mgmt.Statistic()
+		fmt.Printf("\n[DEBUG] Stats: ")
+		for key, value := range stats {
+			fmt.Printf("%s=%d ", key, value)
+		}
+		fmt.Printf("\n> ")
+	}
+}
+
+func (h *WebSocketHub) run() {
+	for {
+		select {
+		case client := <-h.register:
+			h.clients[client] = true
+		case client := <-h.unregister:
+			if _, ok := h.clients[client]; ok {
+				delete(h.clients, client)
+				client.Close()
+			}
+		case message := <-h.broadcast:
+			for client := range h.clients {
+				if err := client.WriteMessage(websocket.TextMessage, message); err != nil {
+					delete(h.clients, client)
+					client.Close()
+				}
+			}
+		}
+	}
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request, conn *rmds.Connection, ch *rmds.Channel, mode rmds.ChannelMode) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		fmt.Printf("[WEB DEBUG] Failed to upgrade WebSocket: %v\n", err)
+		return
+	}
+	defer ws.Close()
+
+	fmt.Printf("[WEB DEBUG] WebSocket client connected from %s\n", r.RemoteAddr)
+	hub.register <- ws
+	defer func() {
+		fmt.Printf("[WEB DEBUG] WebSocket client disconnected\n")
+		hub.unregister <- ws
+	}()
+
+	for {
+		_, message, err := ws.ReadMessage()
+		if err != nil {
+			fmt.Printf("[WEB DEBUG] WebSocket read error: %v\n", err)
+			break
+		}
+
+		fmt.Printf("[WEB DEBUG] Received WebSocket message: %s\n", string(message))
+
+		var msg map[string]interface{}
+		if err := json.Unmarshal(message, &msg); err != nil {
+			fmt.Printf("[WEB DEBUG] Failed to unmarshal message: %v\n", err)
+			continue
+		}
+
+		if msg["type"] == "message" && (mode == rmds.WriteOnly || mode == rmds.RW) {
+			textValue, ok := msg["text"].(string)
+			if !ok {
+				fmt.Printf("[WEB DEBUG] Invalid text field in message\n")
+				continue
+			}
+
+			chatMsg := ChatMessage{
+				Type:      "message",
+				NodeID:    *nodeID,
+				Text:      textValue,
+				Timestamp: time.Now(),
+			}
+			fmt.Printf("[WEB DEBUG] Attempting to send message via RMDS: %+v\n", chatMsg)
+
+			if err := ch.SendMessage(chatMsg); err != nil {
+				fmt.Printf("[WEB DEBUG] RMDS SendMessage ERROR: %v\n", err)
+			} else {
+				fmt.Printf("[WEB DEBUG] RMDS SendMessage SUCCESS\n")
+			}
+		} else if msg["type"] == "command" {
+			cmdValue, ok := msg["command"].(string)
+			if !ok {
+				fmt.Printf("[WEB DEBUG] Invalid command field\n")
+				continue
+			}
+			fmt.Printf("[WEB DEBUG] Handling web command: %s\n", cmdValue)
+			handleWebCommand(ws, conn, cmdValue)
+		} else {
+			fmt.Printf("[WEB DEBUG] Unknown message type or invalid mode. Type: %v, Mode: %v\n", msg["type"], mode)
+		}
+	}
+}
+
+func handleWebCommand(ws *websocket.Conn, conn *rmds.Connection, cmd string) {
+	var response interface{}
+
+	switch cmd {
+	case "stats":
+		response = map[string]interface{}{
+			"type": "stats",
+			"data": conn.Mgmt.Statistic(),
+		}
+	case "nodes":
+		response = map[string]interface{}{
+			"type": "nodes",
+			"data": conn.Mgmt.Nodes(),
+		}
+	case "topology":
+		response = map[string]interface{}{
+			"type": "topology",
+			"data": conn.Mgmt.Topology(),
+		}
+	}
+
+	if response != nil {
+		data, _ := json.Marshal(response)
+		ws.WriteMessage(websocket.TextMessage, data)
+	}
+}
+
+func startWebServer(conn *rmds.Connection, ch *rmds.Channel, mode rmds.ChannelMode) {
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		handleWebSocket(w, r, conn, ch, mode)
+	})
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, htmlContent)
+	})
+
+	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *webPort), nil))
+}
+
+const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>RMDS Chat</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; display: flex; height: 100vh; }
+        .container { display: flex; width: 100%; }
+        .chat-area { flex: 1; display: flex; flex-direction: column; }
+        .debug-area { width: 300px; background: #f5f5f5; padding: 20px; overflow-y: auto; }
+        .messages { flex: 1; overflow-y: auto; padding: 20px; background: #fff; }
+        .message { margin-bottom: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; }
+        .message .timestamp { color: #666; font-size: 12px; }
+        .message .sender { font-weight: bold; color: #333; }
+        .input-area { padding: 20px; background: #fff; border-top: 1px solid #ddd; }
+        .input-area input { width: 100%; padding: 10px; font-size: 16px; border: 1px solid #ddd; border-radius: 5px; }
+        .debug-area h3 { margin-bottom: 10px; }
+        .debug-content { background: #fff; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap; }
+        .controls { padding: 10px; background: #e0e0e0; }
+        .controls button { margin-right: 10px; padding: 5px 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="chat-area">
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="messageInput" placeholder="Type a message..." />
+            </div>
+        </div>
+        <div class="debug-area">
+            <div class="controls">
+                <button onclick="getStats()">Stats</button>
+                <button onclick="getNodes()">Nodes</button>
+                <button onclick="getTopology()">Topology</button>
+            </div>
+            <h3>Debug Info</h3>
+            <div class="debug-content" id="debugContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const ws = new WebSocket('ws://localhost:' + window.location.port + '/ws');
+        const messages = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const debugContent = document.getElementById('debugContent');
+
+        ws.onopen = function() {
+            console.log('[WEB DEBUG] WebSocket connection opened');
+            debugContent.textContent += 'WebSocket connected\n';
+        };
+
+        ws.onclose = function() {
+            console.log('[WEB DEBUG] WebSocket connection closed');
+            debugContent.textContent += 'WebSocket disconnected\n';
+        };
+
+        ws.onerror = function(error) {
+            console.log('[WEB DEBUG] WebSocket error:', error);
+            debugContent.textContent += 'WebSocket error: ' + error + '\n';
+        };
+
+        ws.onmessage = function(event) {
+            console.log('[WEB DEBUG] Received message:', event.data);
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'message') {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'message';
+                messageDiv.innerHTML = '<span class="timestamp">' + new Date(data.timestamp).toLocaleTimeString() + '</span> ' +
+                                     '<span class="sender">' + data.node_id + ':</span> ' + data.text;
+                messages.appendChild(messageDiv);
+                messages.scrollTop = messages.scrollHeight;
+            } else if (data.type === 'stats' || data.type === 'nodes' || data.type === 'topology') {
+                debugContent.textContent = JSON.stringify(data.data, null, 2);
+            }
+        };
+
+        messageInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && messageInput.value) {
+                const message = {type: 'message', text: messageInput.value};
+                console.log('[WEB DEBUG] Sending message:', message);
+                debugContent.textContent += 'SENDING: ' + JSON.stringify(message) + '\n';
+                ws.send(JSON.stringify(message));
+                messageInput.value = '';
+            }
+        });
+
+        function getStats() {
+            ws.send(JSON.stringify({type: 'command', command: 'stats'}));
+        }
+
+        function getNodes() {
+            ws.send(JSON.stringify({type: 'command', command: 'nodes'}));
+        }
+
+        function getTopology() {
+            ws.send(JSON.stringify({type: 'command', command: 'topology'}));
+        }
+    </script>
+</body>
+</html>
+`
