@@ -1,3 +1,7 @@
+github.com/getevo/hash v0.0.0-20250825032744-9cd3895fb194 h1:HSOUuSOtX+00nC5RlLvuu6lnQxUlPj2LTWeOqZxML6c=
+github.com/getevo/hash v0.0.0-20250825032744-9cd3895fb194/go.mod h1:sDAmTVAonnoVGCaFefigDw0hGo0yDwXDX/I5wTP1jyk=
+github.com/getevo/network v0.0.0-20250825030545-2faa60f3e8f8 h1:dlhYiapQ5tXjdUxBUJCDag6ixlDdng0pQalFd/FhFhU=
+github.com/getevo/network v0.0.0-20250825030545-2faa60f3e8f8/go.mod h1:4UD2nJq9FZcQgaxV2MkLUFQBzyBcnpJcwyBvmR+n1wE=
 github.com/golang/snappy v1.0.0 h1:Oy607GVXHs7RtbggtPBnr2RmDArIsAefDwvrdWvRhGs=
 github.com/golang/snappy v1.0.0/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=

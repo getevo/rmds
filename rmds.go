@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/getevo/hash"
+	"github.com/getevo/network"
 	"github.com/golang/snappy"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
@@ -73,7 +77,10 @@ func New(config *Config, opts ...Option) (*Connection, error) {
 	}
 
 	if config.NodeID == "" {
-		config.NodeID = uuid.New().String()[:8]
+		net, _ := network.GetConfig()
+		hostname, _ := os.Hostname()
+		nodeID := strings.ReplaceAll(hostname+"_"+net.LocalIP.String()+"_"+hash.CRC32String(net.HardwareAddress.String()), "[^a-zA-Z0-9_]", "_")
+		config.NodeID = nodeID
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

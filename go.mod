@@ -13,6 +13,8 @@ require (
 )
 
 require (
+	github.com/getevo/hash v0.0.0-20250825032744-9cd3895fb194 // indirect
+	github.com/getevo/network v0.0.0-20250825030545-2faa60f3e8f8 // indirect
 	github.com/klauspost/compress v1.17.0 // indirect
 	github.com/nats-io/nkeys v0.4.5 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
