@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"rmds"
+
+	"github.com/getevo/evo/lib/log"
+	"github.com/getevo/rmds"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	
 	db, err := rmds.NewDatabase(dbPath)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to open database:", err)
 	}
 	defer db.Close()
 
@@ -26,7 +27,7 @@ func main() {
 	// Get all pending receivers
 	receivers, err := db.GetPendingReceivers()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to get pending receivers:", err)
 	}
 	
 	fmt.Printf("Found %d receivers with pending messages:\n", len(receivers))
@@ -50,7 +51,7 @@ func main() {
 	fmt.Println("\n=== All Message Statistics ===")
 	stats, err := db.GetStatistics()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to get stats:", err)
 	}
 	
 	for key, value := range stats {

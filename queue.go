@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getevo/evo/lib/log"
 	"github.com/golang/snappy"
 )
 
@@ -84,7 +85,7 @@ func (q *MessageQueue) getOrCreateConsumer(receiver string) *MessageConsumer {
 		q.wg.Add(1)
 		go consumer.run()
 		
-		fmt.Printf("[QUEUE DEBUG] Started consumer for receiver %s\n", receiver)
+		log.Debug("[QUEUE DEBUG] Started consumer for receiver %s", receiver)
 	}
 	
 	return consumer
@@ -93,15 +94,15 @@ func (q *MessageQueue) getOrCreateConsumer(receiver string) *MessageConsumer {
 // run is the main consumer loop - reads one message, sends it, waits for ACK, repeat
 func (c *MessageConsumer) run() {
 	defer c.queue.wg.Done()
-	fmt.Printf("[CONSUMER DEBUG] Consumer for receiver %s started\n", c.receiver)
+	log.Debug("[CONSUMER DEBUG] Consumer for receiver %s started", c.receiver)
 	
 	for {
 		select {
 		case <-c.stopChan:
-			fmt.Printf("[CONSUMER DEBUG] Consumer for receiver %s stopped\n", c.receiver)
+			log.Debug("[CONSUMER DEBUG] Consumer for receiver %s stopped", c.receiver)
 			return
 		case <-c.queue.conn.ctx.Done():
-			fmt.Printf("[CONSUMER DEBUG] Consumer for receiver %s stopped (context done)\n", c.receiver)
+			log.Debug("[CONSUMER DEBUG] Consumer for receiver %s stopped (context done)", c.receiver)
 			return
 		default:
 			// Try to get next message from database
@@ -146,11 +147,11 @@ func (c *MessageConsumer) processNextMessage() bool {
 		DatabaseID: stored.ID, // Keep unique ID for database operations
 	}
 	
-	fmt.Printf("[CONSUMER DEBUG] Processing message %s to receiver %s\n", msg.ID, c.receiver)
+	log.Debug("[CONSUMER DEBUG] Processing message %s to receiver %s", msg.ID, c.receiver)
 	
 	// Check if message expired
 	if time.Now().After(msg.ExpiresAt) {
-		fmt.Printf("[CONSUMER DEBUG] Message %s expired, dropping\n", msg.ID)
+		log.Debug("[CONSUMER DEBUG] Message %s expired, dropping", msg.ID)
 		c.queue.conn.statistics.IncrementDropped()
 		c.queue.conn.db.MarkMessageSent(qmsg.DatabaseID)
 		return true
@@ -158,14 +159,14 @@ func (c *MessageConsumer) processNextMessage() bool {
 	
 	// Check if receiver is alive
 	if !c.queue.conn.discovery.IsNodeAlive(c.receiver) {
-		fmt.Printf("[CONSUMER DEBUG] Receiver %s is not alive, waiting\n", c.receiver)
+		log.Debug("[CONSUMER DEBUG] Receiver %s is not alive, waiting", c.receiver)
 		time.Sleep(5 * time.Second)
 		return true
 	}
 	
 	// Check if connected to NATS
 	if !c.queue.conn.isConnected() {
-		fmt.Printf("[CONSUMER DEBUG] Not connected to NATS, waiting\n")
+		log.Debug("[CONSUMER DEBUG] Not connected to NATS, waiting")
 		time.Sleep(2 * time.Second)
 		return true
 	}
@@ -184,7 +185,7 @@ func (c *MessageConsumer) processNextMessage() bool {
 func (c *MessageConsumer) sendMessage(qmsg *QueuedMessage) bool {
 	data, err := json.Marshal(qmsg.Message)
 	if err != nil {
-		fmt.Printf("[CONSUMER DEBUG] Failed to marshal message %s: %v\n", qmsg.Message.ID, err)
+		log.Error("[CONSUMER DEBUG] Failed to marshal message %s: %v", qmsg.Message.ID, err)
 		c.queue.conn.statistics.IncrementDropped()
 		return false
 	}
@@ -194,14 +195,14 @@ func (c *MessageConsumer) sendMessage(qmsg *QueuedMessage) bool {
 	}
 
 	subject := fmt.Sprintf("%schannel.%s.%s", c.queue.conn.config.NATSPrefix, qmsg.Message.Channel, c.receiver)
-	fmt.Printf("[CONSUMER DEBUG] Publishing message %s to NATS subject: %s\n", qmsg.Message.ID, subject)
+	log.Debug("[CONSUMER DEBUG] Publishing message %s to NATS subject: %s", qmsg.Message.ID, subject)
 
 	if err := c.queue.conn.nc.Publish(subject, data); err != nil {
-		fmt.Printf("[CONSUMER DEBUG] Failed to publish message %s: %v\n", qmsg.Message.ID, err)
+		log.Error("[CONSUMER DEBUG] Failed to publish message %s: %v", qmsg.Message.ID, err)
 		return false
 	}
 
-	fmt.Printf("[CONSUMER DEBUG] Successfully published message %s to NATS\n", qmsg.Message.ID)
+	log.Debug("[CONSUMER DEBUG] Successfully published message %s to NATS", qmsg.Message.ID)
 	c.queue.conn.db.MarkMessageSent(qmsg.DatabaseID)
 	c.queue.conn.statistics.IncrementDelivered()
 	return true
@@ -211,17 +212,17 @@ func (c *MessageConsumer) sendMessage(qmsg *QueuedMessage) bool {
 func (c *MessageConsumer) waitForACK(qmsg *QueuedMessage) {
 	timeout := time.After(c.queue.conn.config.ACKTimeout)
 	
-	fmt.Printf("[CONSUMER DEBUG] Waiting for ACK for message %s\n", qmsg.Message.ID)
+	log.Debug("[CONSUMER DEBUG] Waiting for ACK for message %s", qmsg.Message.ID)
 	
 	select {
 	case ackMsgID := <-c.ackChan:
 		if ackMsgID == qmsg.Message.ID {
-			fmt.Printf("[CONSUMER DEBUG] Received ACK for message %s - proceeding to next\n", qmsg.Message.ID)
+			log.Debug("[CONSUMER DEBUG] Received ACK for message %s - proceeding to next", qmsg.Message.ID)
 			// Use the unique database ID for acknowledgment
 			c.queue.conn.db.MarkMessageAcknowledged(qmsg.DatabaseID, c.receiver)
 			c.queue.conn.statistics.IncrementReceivedAcks()
 		} else {
-			fmt.Printf("[CONSUMER DEBUG] Received ACK for different message %s (expected %s)\n", ackMsgID, qmsg.Message.ID)
+			log.Debug("[CONSUMER DEBUG] Received ACK for different message %s (expected %s)", ackMsgID, qmsg.Message.ID)
 			// Put it back in the channel for other messages
 			select {
 			case c.ackChan <- ackMsgID:
@@ -229,7 +230,7 @@ func (c *MessageConsumer) waitForACK(qmsg *QueuedMessage) {
 			}
 		}
 	case <-timeout:
-		fmt.Printf("[CONSUMER DEBUG] ACK timeout for message %s - will retry\n", qmsg.Message.ID)
+		log.Debug("[CONSUMER DEBUG] ACK timeout for message %s - will retry", qmsg.Message.ID)
 		// Don't mark as acknowledged, will be retried next time
 	case <-c.stopChan:
 		return
@@ -242,7 +243,7 @@ func (c *MessageConsumer) waitForACK(qmsg *QueuedMessage) {
 
 // Enqueue is the PRODUCER - simply writes message to database
 func (q *MessageQueue) Enqueue(msg *Message, receiver string) {
-	fmt.Printf("[PRODUCER DEBUG] Enqueueing message %s for receiver %s\n", msg.ID, receiver)
+	log.Debug("[PRODUCER DEBUG] Enqueueing message %s for receiver %s", msg.ID, receiver)
 	
 	// Generate unique ID per receiver but keep original message ID for ACK tracking
 	uniqueID := fmt.Sprintf("%s-%s", msg.ID, receiver)
@@ -259,11 +260,11 @@ func (q *MessageQueue) Enqueue(msg *Message, receiver string) {
 	}
 
 	if err := q.conn.db.StoreMessage(storedMsg); err != nil {
-		fmt.Printf("[PRODUCER DEBUG] Failed to store message %s in database: %v\n", msg.ID, err)
+		log.Error("[PRODUCER DEBUG] Failed to store message %s in database: %v", msg.ID, err)
 		return
 	}
 
-	fmt.Printf("[PRODUCER DEBUG] Message %s stored in database for receiver %s\n", msg.ID, receiver)
+	log.Debug("[PRODUCER DEBUG] Message %s stored in database for receiver %s", msg.ID, receiver)
 	
 	// Ensure consumer exists for this receiver
 	q.getOrCreateConsumer(receiver)
@@ -278,18 +279,18 @@ func (q *MessageQueue) DeliverACK(messageID string, receiver string) {
 	if exists {
 		select {
 		case consumer.ackChan <- messageID:
-			fmt.Printf("[QUEUE DEBUG] Delivered ACK for message %s to consumer %s\n", messageID, receiver)
+			log.Debug("[QUEUE DEBUG] Delivered ACK for message %s to consumer %s", messageID, receiver)
 		default:
-			fmt.Printf("[QUEUE DEBUG] ACK channel full for consumer %s, dropping ACK for message %s\n", receiver, messageID)
+			log.Debug("[QUEUE DEBUG] ACK channel full for consumer %s, dropping ACK for message %s", receiver, messageID)
 		}
 	} else {
-		fmt.Printf("[QUEUE DEBUG] No consumer found for receiver %s, cannot deliver ACK for message %s\n", receiver, messageID)
+		log.Debug("[QUEUE DEBUG] No consumer found for receiver %s, cannot deliver ACK for message %s", receiver, messageID)
 	}
 }
 
 // FlushPendingMessages is called when NATS reconnects - consumers will automatically pick up messages
 func (q *MessageQueue) FlushPendingMessages() {
-	fmt.Printf("[QUEUE DEBUG] NATS reconnected - consumers will resume processing\n")
+	log.Debug("[QUEUE DEBUG] NATS reconnected - consumers will resume processing")
 	// No action needed - consumers are already running and will pick up messages
 }
 
@@ -297,7 +298,7 @@ func (q *MessageQueue) Stop() {
 	q.mu.Lock()
 	for receiver, consumer := range q.consumers {
 		close(consumer.stopChan)
-		fmt.Printf("[QUEUE DEBUG] Stopping consumer for receiver %s\n", receiver)
+		log.Debug("[QUEUE DEBUG] Stopping consumer for receiver %s", receiver)
 	}
 	q.mu.Unlock()
 	

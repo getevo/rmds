@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getevo/evo/lib/log"
 	"github.com/getevo/hash"
 	"github.com/getevo/network"
 	"github.com/golang/snappy"
@@ -89,6 +90,21 @@ func New(config *Config, opts ...Option) (*Connection, error) {
 		nodeID = strings.ReplaceAll(nodeID, "[^a-zA-Z0-9_]", "_")
 		config.NodeID = nodeID
 	}
+
+	// Configure logging based on config
+	logSettings := &log.Logger{
+		WriteToFile: false,
+		Concurrent:  true,
+		MaxSize:     10,
+		MaxAge:      7,
+		Path:        "./logs/",
+	}
+	if !config.EnableDebugLogging {
+		logSettings.Level = log.ErrorLevel // Only show errors and above
+	} else {
+		logSettings.Level = log.DebugLevel // Show debug and above
+	}
+	log.SetSettings(logSettings)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -238,7 +254,7 @@ func (c *Connection) Join(channelName string, mode ChannelMode) *Channel {
 				if err := ch.subscribe(); err == nil {
 					break
 				}
-				fmt.Printf("[SUBSCRIBE DEBUG] Retrying subscription in 1 second...\n")
+				log.Debug("[SUBSCRIBE DEBUG] Retrying subscription in 1 second...")
 				time.Sleep(time.Second)
 				select {
 				case <-c.ctx.Done():
@@ -256,7 +272,7 @@ func (c *Connection) Join(channelName string, mode ChannelMode) *Channel {
 
 func (ch *Channel) subscribe() error {
 	if ch.mode == WriteOnly {
-		fmt.Printf("[SUBSCRIBE DEBUG] Channel '%s' is WriteOnly, skipping subscription\n", ch.name)
+		log.Debug("[SUBSCRIBE DEBUG] Channel '%s' is WriteOnly, skipping subscription", ch.name)
 		return nil
 	}
 
@@ -264,37 +280,37 @@ func (ch *Channel) subscribe() error {
 	defer ch.mu.Unlock()
 
 	if ch.subscribed {
-		fmt.Printf("[SUBSCRIBE DEBUG] Channel '%s' already subscribed\n", ch.name)
+		log.Debug("[SUBSCRIBE DEBUG] Channel '%s' already subscribed", ch.name)
 		return nil
 	}
 
 	if !ch.conn.isConnected() {
-		fmt.Printf("[SUBSCRIBE DEBUG] Not connected to NATS, cannot subscribe to channel '%s'\n", ch.name)
+		log.Debug("[SUBSCRIBE DEBUG] Not connected to NATS, cannot subscribe to channel '%s'", ch.name)
 		return fmt.Errorf("not connected to NATS")
 	}
 
 	subject := fmt.Sprintf("%schannel.%s.%s", ch.conn.config.NATSPrefix, ch.name, ch.conn.config.NodeID)
-	fmt.Printf("[SUBSCRIBE DEBUG] Subscribing to NATS subject: %s\n", subject)
+	log.Debug("[SUBSCRIBE DEBUG] Subscribing to NATS subject: %s", subject)
 
 	sub, err := ch.conn.nc.Subscribe(subject, func(msg *nats.Msg) {
-		fmt.Printf("[SUBSCRIBE DEBUG] Received NATS message on subject: %s\n", subject)
+		log.Debug("[SUBSCRIBE DEBUG] Received NATS message on subject: %s", subject)
 		ch.handleMessage(msg.Data)
 	})
 
 	if err != nil {
-		fmt.Printf("[SUBSCRIBE DEBUG] Failed to subscribe to subject '%s': %v\n", subject, err)
+		log.Error("[SUBSCRIBE DEBUG] Failed to subscribe to subject '%s': %v", subject, err)
 		return err
 	}
 
 	ch.sub = sub
 	ch.subscribed = true
-	fmt.Printf("[SUBSCRIBE DEBUG] Successfully subscribed to subject: %s\n", subject)
+	log.Debug("[SUBSCRIBE DEBUG] Successfully subscribed to subject: %s", subject)
 
 	return nil
 }
 
 func (ch *Channel) handleMessage(data []byte) {
-	fmt.Printf("[RMDS DEBUG] handleMessage: Received message on channel '%s' for node '%s'\n", ch.name, ch.conn.config.NodeID)
+	log.Debug("[RMDS DEBUG] handleMessage: Received message on channel '%s' for node '%s'", ch.name, ch.conn.config.NodeID)
 
 	if ch.conn.config.EnableCompression {
 		decompressed, err := snappy.Decode(nil, data)
@@ -305,14 +321,14 @@ func (ch *Channel) handleMessage(data []byte) {
 
 	var msg Message
 	if err := json.Unmarshal(data, &msg); err != nil {
-		fmt.Printf("[RMDS DEBUG] handleMessage: Failed to unmarshal message: %v\n", err)
+		log.Error("[RMDS DEBUG] handleMessage: Failed to unmarshal message: %v", err)
 		return
 	}
 
-	fmt.Printf("[RMDS DEBUG] handleMessage: Parsed message ID=%s from sender=%s\n", msg.ID, msg.Sender)
+	log.Debug("[RMDS DEBUG] handleMessage: Parsed message ID=%s from sender=%s", msg.ID, msg.Sender)
 
 	if time.Now().After(msg.ExpiresAt) {
-		fmt.Printf("[RMDS DEBUG] handleMessage: Message expired, dropping\n")
+		log.Debug("[RMDS DEBUG] handleMessage: Message expired, dropping")
 		ch.conn.statistics.IncrementDropped()
 		return
 	}
@@ -326,7 +342,7 @@ func (ch *Channel) handleMessage(data []byte) {
 	copy(handlers, ch.handlers)
 	ch.mu.RUnlock()
 
-	fmt.Printf("[RMDS DEBUG] handleMessage: Calling %d handlers for message\n", len(handlers))
+	log.Debug("[RMDS DEBUG] handleMessage: Calling %d handlers for message", len(handlers))
 	for _, handler := range handlers {
 		go handler(&msg)
 	}
@@ -399,13 +415,13 @@ func (ch *Channel) SendMessage(data interface{}, opts ...SendOption) error {
 	}
 
 	nodes := ch.conn.discovery.GetChannelNodes(ch.name)
-	fmt.Printf("[RMDS DEBUG] SendMessage: Found %d channel nodes for channel '%s': %v\n", len(nodes), ch.name, nodes)
+	log.Debug("[RMDS DEBUG] SendMessage: Found %d channel nodes for channel '%s': %v", len(nodes), ch.name, nodes)
 
 	for _, nodeID := range nodes {
 		if nodeID == ch.conn.config.NodeID {
 			continue
 		}
-		fmt.Printf("[RMDS DEBUG] SendMessage: Enqueueing message %s to node %s\n", msg.ID, nodeID)
+		log.Debug("[RMDS DEBUG] SendMessage: Enqueueing message %s to node %s", msg.ID, nodeID)
 		ch.conn.queue.Enqueue(msg, nodeID)
 	}
 
@@ -461,11 +477,11 @@ func (c *Connection) subscribeToACKs() {
 	})
 
 	if err != nil {
-		fmt.Printf("[ACK DEBUG] Failed to subscribe to ACK subject %s: %v\n", ackSubject, err)
+		log.Error("[ACK DEBUG] Failed to subscribe to ACK subject %s: %v", ackSubject, err)
 		return
 	}
 
-	fmt.Printf("[ACK DEBUG] Subscribed to ACK subject: %s\n", ackSubject)
+	log.Debug("[ACK DEBUG] Subscribed to ACK subject: %s", ackSubject)
 
 	// Store subscription for cleanup
 	c.mu.Lock()
@@ -484,7 +500,7 @@ func (c *Connection) handleACK(msg *nats.Msg) {
 
 	var ack map[string]string
 	if err := json.Unmarshal(data, &ack); err != nil {
-		fmt.Printf("[ACK DEBUG] Failed to unmarshal ACK: %v\n", err)
+		log.Error("[ACK DEBUG] Failed to unmarshal ACK: %v", err)
 		return
 	}
 
@@ -492,11 +508,11 @@ func (c *Connection) handleACK(msg *nats.Msg) {
 	receiver := ack["receiver"]
 
 	if messageID == "" || receiver == "" {
-		fmt.Printf("[ACK DEBUG] Invalid ACK - missing message_id or receiver\n")
+		log.Error("[ACK DEBUG] Invalid ACK - missing message_id or receiver")
 		return
 	}
 
-	fmt.Printf("[ACK DEBUG] Received ACK for message %s from receiver %s\n", messageID, receiver)
+	log.Debug("[ACK DEBUG] Received ACK for message %s from receiver %s", messageID, receiver)
 
 	// Deliver ACK to the appropriate consumer
 	if c.queue != nil {

@@ -12,6 +12,7 @@ type Config struct {
 	NATSPrefix                 string        // Prefix for all NATS subjects used by RMDS
 	EnableCompression          bool          // Enable Snappy compression for message payloads
 	StoragePath                string        // Path to SQLite database file (supports {nodeID} placeholder)
+	EnableDebugLogging         bool          // Enable debug logging output
 	KeepaliveInterval          time.Duration // How often to send keepalive messages
 	MessageExpiry              time.Duration // Default expiry time for messages if not specified
 	NodeOfflineTimeout         time.Duration // Time to wait before considering a node offline
@@ -35,6 +36,7 @@ func DefaultConfig() *Config {
 		NATSPrefix:                 "rmds.",
 		EnableCompression:          true,
 		StoragePath:                "./rmds-{nodeID}.db",
+		EnableDebugLogging:         false,
 		KeepaliveInterval:          10 * time.Second,
 		MessageExpiry:              24 * time.Hour,
 		NodeOfflineTimeout:         30 * time.Second,

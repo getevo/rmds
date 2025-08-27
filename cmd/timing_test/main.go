@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
-	"rmds"
+
+	"github.com/getevo/evo/lib/log"
+	"github.com/getevo/rmds"
 )
 
 func main() {
@@ -13,7 +14,7 @@ func main() {
 	
 	conn, err := rmds.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	defer conn.Unsubscribe()
 	
@@ -58,7 +59,7 @@ func main() {
 	// Final database check
 	db, err := rmds.NewDatabase(config.GetDatabasePath())
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	defer db.Close()
 

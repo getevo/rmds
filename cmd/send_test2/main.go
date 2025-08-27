@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
-	"rmds"
+
+	"github.com/getevo/evo/lib/log"
+	"github.com/getevo/rmds"
 )
 
 func main() {
@@ -13,7 +14,7 @@ func main() {
 	
 	conn, err := rmds.New(config)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	defer conn.Unsubscribe()
 	
@@ -37,7 +38,7 @@ func main() {
 	fmt.Println("Sending test message...")
 	err = ch.SendMessage("Test message for Bob consumer debugging - attempt 2")
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	
 	fmt.Println("Message sent! Waiting 2 seconds then checking database...")
@@ -46,14 +47,14 @@ func main() {
 	// Check what's in the database
 	db, err := rmds.NewDatabase(config.GetDatabasePath())
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	defer db.Close()
 
 	fmt.Println("=== Database Statistics ===")
 	stats, err := db.GetStatistics()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	
 	for key, value := range stats {
@@ -63,7 +64,7 @@ func main() {
 	fmt.Println("\n=== Pending Receivers ===")
 	receivers, err := db.GetPendingReceivers()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create connection:", err)
 	}
 	
 	fmt.Printf("Found %d receivers with pending messages:\n", len(receivers))

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"time"
-	"rmds"
+	"github.com/getevo/rmds"
 )
 
 func main() {
@@ -61,6 +61,7 @@ func main() {
 	
 	// Check discovered nodes
 	nodes := sender.GetDiscovery().GetChannelNodes("test")
+	log.Printf("DEBUG: sender discovered %d nodes: %v", len(nodes), nodes)
 	fmt.Printf("Sender discovered %d nodes: %v\n", len(nodes), nodes)
 	
 	if len(nodes) != 3 {
@@ -74,11 +75,13 @@ func main() {
 		"Test message 3 - NO RECEIVER SHOULD MISS THIS",
 	}
 	
+	log.Printf("DEBUG: sending %d test messages", len(testMessages))
 	fmt.Printf("Sending %d test messages...\n", len(testMessages))
 	for i, msgText := range testMessages {
+		log.Printf("DEBUG: sending message %d: %s", i+1, msgText)
 		fmt.Printf("Sending message %d: %s\n", i+1, msgText)
 		if err := senderCh.SendMessage(msgText); err != nil {
-			log.Fatalf("Failed to send message %d: %v", i+1, err)
+			log.Fatal("failed to send test message %d (%s): %v", i+1, msgText, err)
 		}
 		time.Sleep(1 * time.Second) // Small delay between messages
 	}

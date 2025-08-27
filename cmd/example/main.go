@@ -2,9 +2,10 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"time"
-	"rmds"
+
+	"github.com/getevo/evo/lib/log"
+	"github.com/getevo/rmds"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	// Create sender connection
 	sender, err := rmds.New(senderConfig)
 	if err != nil {
-		log.Fatalf("Failed to create sender: %v", err)
+		log.Fatal("Failed to create sender:", err)
 	}
 	defer sender.Unsubscribe()
 	
@@ -31,7 +32,7 @@ func main() {
 	// Create receiver connection
 	receiver, err := rmds.New(receiverConfig)
 	if err != nil {
-		log.Fatalf("Failed to create receiver: %v", err)
+		log.Fatal("Failed to create receiver:", err)
 	}
 	defer receiver.Unsubscribe()
 	
@@ -64,7 +65,7 @@ func main() {
 	for i, msg := range messages {
 		fmt.Printf("  Sending message %d: %s\n", i+1, msg)
 		if err := senderCh.SendMessage(msg); err != nil {
-			log.Printf("Failed to send message %d: %v", i+1, err)
+			log.Error("Failed to send message", i+1, ":", err)
 		}
 		time.Sleep(500 * time.Millisecond) // Small delay between messages
 	}

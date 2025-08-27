@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getevo/evo/lib/log"
 	"github.com/golang/snappy"
 	"github.com/nats-io/nats.go"
 )
@@ -120,14 +121,14 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 
 	var keepAlive KeepAlive
 	if err := json.Unmarshal(data, &keepAlive); err != nil {
-		fmt.Printf("[DISCOVERY DEBUG] Failed to unmarshal keepalive: %v\n", err)
+		log.Error("[DISCOVERY DEBUG] Failed to unmarshal keepalive: %v", err)
 		return
 	}
 
-	fmt.Printf("[DISCOVERY DEBUG] Received keepalive from node '%s' with channels: %+v\n", keepAlive.NodeID, keepAlive.Channels)
+	log.Debug("[DISCOVERY DEBUG] Received keepalive from node '%s' with channels: %+v", keepAlive.NodeID, keepAlive.Channels)
 
 	if keepAlive.NodeID == d.conn.config.NodeID {
-		fmt.Printf("[DISCOVERY DEBUG] Ignoring keepalive from self\n")
+		log.Debug("[DISCOVERY DEBUG] Ignoring keepalive from self")
 		return
 	}
 
@@ -136,14 +137,14 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 
 	node, exists := d.nodes[keepAlive.NodeID]
 	if !exists {
-		fmt.Printf("[DISCOVERY DEBUG] New node discovered: %s\n", keepAlive.NodeID)
+		log.Debug("[DISCOVERY DEBUG] New node discovered: %s", keepAlive.NodeID)
 		node = &NodeInfo{
 			ID:       keepAlive.NodeID,
 			Channels: make(map[string]ChannelMode),
 		}
 		d.nodes[keepAlive.NodeID] = node
 	} else {
-		fmt.Printf("[DISCOVERY DEBUG] Updating existing node: %s\n", keepAlive.NodeID)
+		log.Debug("[DISCOVERY DEBUG] Updating existing node: %s", keepAlive.NodeID)
 	}
 
 	node.LastSeen = keepAlive.Time
@@ -154,7 +155,7 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 			d.channels[channel] = make(map[string]ChannelMode)
 		}
 		d.channels[channel][keepAlive.NodeID] = mode
-		fmt.Printf("[DISCOVERY DEBUG] Node '%s' registered on channel '%s' with mode %d\n", keepAlive.NodeID, channel, mode)
+		log.Debug("[DISCOVERY DEBUG] Node '%s' registered on channel '%s' with mode %d", keepAlive.NodeID, channel, mode)
 		
 		// Save to database immediately
 		modeStr := ""
@@ -169,7 +170,7 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 		
 		if modeStr != "" {
 			if err := d.conn.db.SaveTopologyNode(keepAlive.NodeID, channel, modeStr, true); err != nil {
-				fmt.Printf("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v\n", 
+				log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v", 
 					keepAlive.NodeID, channel, err)
 			}
 		}
@@ -192,11 +193,11 @@ func (d *Discovery) cleanupStaleNodes() {
 
 			for nodeID, node := range d.nodes {
 				if node.LastSeen.Before(cutoff) {
-					fmt.Printf("[DISCOVERY DEBUG] Node %s is now offline\n", nodeID)
+					log.Debug("[DISCOVERY DEBUG] Node %s is now offline", nodeID)
 					
 					// Mark node as offline in database instead of deleting
 					if err := d.conn.db.UpdateNodeStatus(nodeID, false); err != nil {
-						fmt.Printf("[DISCOVERY DEBUG] Error marking node %s as offline: %v\n", nodeID, err)
+						log.Error("[DISCOVERY DEBUG] Error marking node %s as offline: %v", nodeID, err)
 					}
 					
 					delete(d.nodes, nodeID)
@@ -230,40 +231,40 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 	defer d.mu.RUnlock()
 
 	nodes := []string{}
-	fmt.Printf("[DISCOVERY DEBUG] GetChannelNodes: Looking for nodes on channel '%s'\n", channel)
+	log.Debug("[DISCOVERY DEBUG] GetChannelNodes: Looking for nodes on channel '%s'", channel)
 	
 	// First try in-memory discovery
 	if channelNodes, exists := d.channels[channel]; exists {
-		fmt.Printf("[DISCOVERY DEBUG] Channel '%s' has nodes: %+v\n", channel, channelNodes)
+		log.Debug("[DISCOVERY DEBUG] Channel '%s' has nodes: %+v", channel, channelNodes)
 		for nodeID, mode := range channelNodes {
-			fmt.Printf("[DISCOVERY DEBUG] Node '%s' has mode %d (ReadOnly=%d, RW=%d)\n", nodeID, mode, ReadOnly, RW)
+			log.Debug("[DISCOVERY DEBUG] Node '%s' has mode %d (ReadOnly=%d, RW=%d)", nodeID, mode, ReadOnly, RW)
 			if mode == ReadOnly || mode == RW {
 				if d.IsNodeAlive(nodeID) {
-					fmt.Printf("[DISCOVERY DEBUG] Adding alive node '%s' to target list\n", nodeID)
+					log.Debug("[DISCOVERY DEBUG] Adding alive node '%s' to target list", nodeID)
 					nodes = append(nodes, nodeID)
 				} else {
-					fmt.Printf("[DISCOVERY DEBUG] Node '%s' is not alive\n", nodeID)
+					log.Debug("[DISCOVERY DEBUG] Node '%s' is not alive", nodeID)
 				}
 			} else {
-				fmt.Printf("[DISCOVERY DEBUG] Node '%s' mode %d is not ReadOnly or RW\n", nodeID, mode)
+				log.Debug("[DISCOVERY DEBUG] Node '%s' mode %d is not ReadOnly or RW", nodeID, mode)
 			}
 		}
 	}
 	
 	// Fallback to database when no receivers found in memory
 	if len(nodes) == 0 {
-		fmt.Printf("[DISCOVERY DEBUG] No receivers found in memory for channel '%s', checking database\n", channel)
+		log.Debug("[DISCOVERY DEBUG] No receivers found in memory for channel '%s', checking database", channel)
 		if dbNodes, err := d.conn.db.GetAliveNodesForChannel(channel); err == nil && len(dbNodes) > 0 {
 			nodes = dbNodes
-			fmt.Printf("[DISCOVERY DEBUG] Found %d nodes in database for channel '%s': %v\n", len(nodes), channel, nodes)
+			log.Debug("[DISCOVERY DEBUG] Found %d nodes in database for channel '%s': %v", len(nodes), channel, nodes)
 		} else if err != nil {
-			fmt.Printf("[DISCOVERY DEBUG] Error getting nodes from database: %v\n", err)
+			log.Error("[DISCOVERY DEBUG] Error getting nodes from database: %v", err)
 		} else {
-			fmt.Printf("[DISCOVERY DEBUG] No nodes found in database for channel '%s'\n", channel)
+			log.Debug("[DISCOVERY DEBUG] No nodes found in database for channel '%s'", channel)
 		}
 	}
 	
-	fmt.Printf("[DISCOVERY DEBUG] GetChannelNodes returning %d nodes: %v\n", len(nodes), nodes)
+	log.Debug("[DISCOVERY DEBUG] GetChannelNodes returning %d nodes: %v", len(nodes), nodes)
 	return nodes
 }
 
@@ -345,11 +346,11 @@ func (d *Discovery) GetTopology() map[string]interface{} {
 
 // LoadTopologyFromDatabase loads the topology from SQLite database on startup
 func (d *Discovery) LoadTopologyFromDatabase() {
-	fmt.Printf("[DISCOVERY DEBUG] Loading topology from database\n")
+	log.Debug("[DISCOVERY DEBUG] Loading topology from database")
 	
 	nodes, err := d.conn.db.GetTopologyNodes()
 	if err != nil {
-		fmt.Printf("[DISCOVERY DEBUG] Error loading topology from database: %v\n", err)
+		log.Error("[DISCOVERY DEBUG] Error loading topology from database: %v", err)
 		return
 	}
 
@@ -394,12 +395,12 @@ func (d *Discovery) LoadTopologyFromDatabase() {
 		// Only include if node was alive when stored
 		if topologyNode.IsAlive {
 			d.channels[topologyNode.Channel][nodeID] = mode
-			fmt.Printf("[DISCOVERY DEBUG] Loaded node '%s' on channel '%s' with mode %s\n", 
+			log.Debug("[DISCOVERY DEBUG] Loaded node '%s' on channel '%s' with mode %s", 
 				nodeID, topologyNode.Channel, topologyNode.Mode)
 		}
 	}
 	
-	fmt.Printf("[DISCOVERY DEBUG] Loaded %d topology nodes from database\n", len(nodes))
+	log.Debug("[DISCOVERY DEBUG] Loaded %d topology nodes from database", len(nodes))
 }
 
 // SaveTopologyToDatabase saves current topology state to database
@@ -412,7 +413,7 @@ func (d *Discovery) SaveTopologyToDatabase() {
 		
 		// Update node status first
 		if err := d.conn.db.UpdateNodeStatus(nodeID, isAlive); err != nil {
-			fmt.Printf("[DISCOVERY DEBUG] Error updating node status for %s: %v\n", nodeID, err)
+			log.Error("[DISCOVERY DEBUG] Error updating node status for %s: %v", nodeID, err)
 		}
 		
 		// Save each channel this node participates in
@@ -429,7 +430,7 @@ func (d *Discovery) SaveTopologyToDatabase() {
 			
 			if modeStr != "" {
 				if err := d.conn.db.SaveTopologyNode(nodeID, channel, modeStr, isAlive); err != nil {
-					fmt.Printf("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v\n", 
+					log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v", 
 						nodeID, channel, err)
 				}
 			}

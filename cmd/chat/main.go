@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/getevo/evo/lib/log"
 	"github.com/getevo/rmds"
 	"github.com/gorilla/websocket"
 )
@@ -59,11 +59,12 @@ func main() {
 	config := rmds.DefaultConfig()
 	config.NATSServers = []string{fmt.Sprintf("nats://%s", *nats)}
 	config.NodeID = *nodeID
+	config.EnableDebugLogging = *debug
 	// StoragePath will be set automatically based on the final NodeID (auto-generated or provided)
 
 	conn, err := rmds.New(config)
 	if err != nil {
-		log.Fatalf("Failed to create RMDS connection: %v", err)
+		log.Fatal("Failed to create RMDS connection:", err)
 	}
 	defer conn.Unsubscribe()
 
@@ -86,18 +87,18 @@ func main() {
 
 	if channelMode == rmds.ReadOnly || channelMode == rmds.RW {
 		ch.OnMessage(func(msg *rmds.Message) {
-			fmt.Printf("[RMDS DEBUG] Received RMDS message from %s: %s\n", msg.Sender, string(msg.Data))
+			log.Debug("[RMDS DEBUG] Received RMDS message from %s: %s", msg.Sender, string(msg.Data))
 			var chatMsg ChatMessage
 			if err := json.Unmarshal(msg.Data, &chatMsg); err == nil {
 				fmt.Printf("\n[%s] %s: %s\n> ", chatMsg.Timestamp.Format("15:04:05"), chatMsg.NodeID, chatMsg.Text)
 
 				if *webPort > 0 {
 					webMsg, _ := json.Marshal(chatMsg)
-					fmt.Printf("[WEB DEBUG] Broadcasting message to %d clients\n", len(hub.clients))
+					log.Debug("[WEB DEBUG] Broadcasting message to %d clients", len(hub.clients))
 					hub.broadcast <- webMsg
 				}
 			} else {
-				fmt.Printf("[RMDS DEBUG] Failed to unmarshal received message: %v\n", err)
+				log.Error("[RMDS DEBUG] Failed to unmarshal received message: %v", err)
 			}
 		})
 	}
@@ -194,11 +195,7 @@ func debugLoop(conn *rmds.Connection) {
 
 	for range ticker.C {
 		stats := conn.Mgmt.Statistic()
-		fmt.Printf("\n[DEBUG] Stats: ")
-		for key, value := range stats {
-			fmt.Printf("%s=%d ", key, value)
-		}
-		fmt.Printf("\n> ")
+		log.Debug("[DEBUG] Stats: %+v", stats)
 	}
 }
 
@@ -226,37 +223,37 @@ func (h *WebSocketHub) run() {
 func handleWebSocket(w http.ResponseWriter, r *http.Request, conn *rmds.Connection, ch *rmds.Channel, mode rmds.ChannelMode, nodeID string) {
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		fmt.Printf("[WEB DEBUG] Failed to upgrade WebSocket: %v\n", err)
+		log.Error("[WEB DEBUG] Failed to upgrade WebSocket: %v", err)
 		return
 	}
 	defer ws.Close()
 
-	fmt.Printf("[WEB DEBUG] WebSocket client connected from %s\n", r.RemoteAddr)
+	log.Debug("[WEB DEBUG] WebSocket client connected from %s", r.RemoteAddr)
 	hub.register <- ws
 	defer func() {
-		fmt.Printf("[WEB DEBUG] WebSocket client disconnected\n")
+		log.Debug("[WEB DEBUG] WebSocket client disconnected")
 		hub.unregister <- ws
 	}()
 
 	for {
 		_, message, err := ws.ReadMessage()
 		if err != nil {
-			fmt.Printf("[WEB DEBUG] WebSocket read error: %v\n", err)
+			log.Error("[WEB DEBUG] WebSocket read error: %v", err)
 			break
 		}
 
-		fmt.Printf("[WEB DEBUG] Received WebSocket message: %s\n", string(message))
+		log.Debug("[WEB DEBUG] Received WebSocket message: %s", string(message))
 
 		var msg map[string]interface{}
 		if err := json.Unmarshal(message, &msg); err != nil {
-			fmt.Printf("[WEB DEBUG] Failed to unmarshal message: %v\n", err)
+			log.Error("[WEB DEBUG] Failed to unmarshal message: %v", err)
 			continue
 		}
 
 		if msg["type"] == "message" && (mode == rmds.WriteOnly || mode == rmds.RW) {
 			textValue, ok := msg["text"].(string)
 			if !ok {
-				fmt.Printf("[WEB DEBUG] Invalid text field in message\n")
+				log.Error("[WEB DEBUG] Invalid text field in message")
 				continue
 			}
 
@@ -266,23 +263,23 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, conn *rmds.Connecti
 				Text:      textValue,
 				Timestamp: time.Now(),
 			}
-			fmt.Printf("[WEB DEBUG] Attempting to send message via RMDS: %+v\n", chatMsg)
+			log.Debug("[WEB DEBUG] Attempting to send message via RMDS: %+v", chatMsg)
 
 			if err := ch.SendMessage(chatMsg); err != nil {
-				fmt.Printf("[WEB DEBUG] RMDS SendMessage ERROR: %v\n", err)
+				log.Error("[WEB DEBUG] RMDS SendMessage ERROR: %v", err)
 			} else {
-				fmt.Printf("[WEB DEBUG] RMDS SendMessage SUCCESS\n")
+				log.Debug("[WEB DEBUG] RMDS SendMessage SUCCESS")
 			}
 		} else if msg["type"] == "command" {
 			cmdValue, ok := msg["command"].(string)
 			if !ok {
-				fmt.Printf("[WEB DEBUG] Invalid command field\n")
+				log.Error("[WEB DEBUG] Invalid command field")
 				continue
 			}
-			fmt.Printf("[WEB DEBUG] Handling web command: %s\n", cmdValue)
+			log.Debug("[WEB DEBUG] Handling web command: %s", cmdValue)
 			handleWebCommand(ws, conn, cmdValue)
 		} else {
-			fmt.Printf("[WEB DEBUG] Unknown message type or invalid mode. Type: %v, Mode: %v\n", msg["type"], mode)
+			log.Error("[WEB DEBUG] Unknown message type or invalid mode. Type: %v, Mode: %v", msg["type"], mode)
 		}
 	}
 }
