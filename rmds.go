@@ -79,7 +79,14 @@ func New(config *Config, opts ...Option) (*Connection, error) {
 	if config.NodeID == "" {
 		net, _ := network.GetConfig()
 		hostname, _ := os.Hostname()
-		nodeID := strings.ReplaceAll(hostname+"_"+net.LocalIP.String()+"_"+hash.CRC32String(net.HardwareAddress.String()), "[^a-zA-Z0-9_]", "_")
+		nodeID := hostname + "_"
+		if net != nil && net.LocalIP != nil {
+			nodeID += net.LocalIP.String() + "_"
+		}
+		if net != nil && net.HardwareAddress != nil {
+			nodeID += hash.CRC32String(net.HardwareAddress.String())
+		}
+		nodeID = strings.ReplaceAll(nodeID, "[^a-zA-Z0-9_]", "_")
 		config.NodeID = nodeID
 	}
 
