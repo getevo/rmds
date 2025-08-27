@@ -288,7 +288,7 @@ func (ch *Channel) subscribe() error {
 
 func (ch *Channel) handleMessage(data []byte) {
 	fmt.Printf("[RMDS DEBUG] handleMessage: Received message on channel '%s' for node '%s'\n", ch.name, ch.conn.config.NodeID)
-	
+
 	if ch.conn.config.EnableCompression {
 		decompressed, err := snappy.Decode(nil, data)
 		if err == nil {
@@ -436,7 +436,7 @@ func (c *Connection) resubscribeChannels() {
 		}
 		c.discovery.AnnounceChannel(ch.name, ch.mode)
 	}
-	
+
 	// Subscribe to ACKs for the producer-consumer pattern
 	c.subscribeToACKs()
 }
@@ -446,20 +446,20 @@ func (c *Connection) subscribeToACKs() {
 	if !c.isConnected() {
 		return
 	}
-	
+
 	ackSubject := fmt.Sprintf("%sack.%s", c.config.NATSPrefix, c.config.NodeID)
-	
+
 	sub, err := c.nc.Subscribe(ackSubject, func(msg *nats.Msg) {
 		c.handleACK(msg)
 	})
-	
+
 	if err != nil {
 		fmt.Printf("[ACK DEBUG] Failed to subscribe to ACK subject %s: %v\n", ackSubject, err)
 		return
 	}
-	
+
 	fmt.Printf("[ACK DEBUG] Subscribed to ACK subject: %s\n", ackSubject)
-	
+
 	// Store subscription for cleanup
 	c.mu.Lock()
 	c.ackSubscription = sub
@@ -480,17 +480,17 @@ func (c *Connection) handleACK(msg *nats.Msg) {
 		fmt.Printf("[ACK DEBUG] Failed to unmarshal ACK: %v\n", err)
 		return
 	}
-	
+
 	messageID := ack["message_id"]
 	receiver := ack["receiver"]
-	
+
 	if messageID == "" || receiver == "" {
 		fmt.Printf("[ACK DEBUG] Invalid ACK - missing message_id or receiver\n")
 		return
 	}
-	
+
 	fmt.Printf("[ACK DEBUG] Received ACK for message %s from receiver %s\n", messageID, receiver)
-	
+
 	// Deliver ACK to the appropriate consumer
 	if c.queue != nil {
 		c.queue.DeliverACK(messageID, receiver)
@@ -605,4 +605,8 @@ func trimSpace(s string) string {
 
 func (c *Connection) GetDiscovery() *Discovery {
 	return c.discovery
+}
+
+func (c *Connection) GetNC() *nats.Conn {
+	return c.nc
 }
