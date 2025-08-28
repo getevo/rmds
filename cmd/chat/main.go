@@ -97,8 +97,13 @@ func main() {
 					log.Debug("[WEB DEBUG] Broadcasting message to %d clients", len(hub.clients))
 					hub.broadcast <- webMsg
 				}
+
+				// Manually acknowledge the message
+				msg.Ack()
 			} else {
 				log.Error("[RMDS DEBUG] Failed to unmarshal received message: %v", err)
+				// Still ACK invalid messages to avoid infinite retries
+				msg.Ack()
 			}
 		})
 	}

@@ -62,6 +62,8 @@ func main() {
     // Set up message handler
     channel.OnMessage(func(message *rmds.Message) {
         fmt.Printf("Received: %s from %s\n", string(message.Data), message.Sender)
+        // Manually acknowledge the message
+        message.Ack()
     })
     
     // Send a message
@@ -175,6 +177,9 @@ channel.OnMessage(func(message *rmds.Message) {
     if err := json.Unmarshal(message.Data, &user); err == nil {
         fmt.Printf("User: %+v\n", user)
     }
+    
+    // Manually acknowledge the message
+    message.Ack()
 })
 ```
 

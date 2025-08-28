@@ -42,12 +42,21 @@ func NewDiscovery(conn *Connection) *Discovery {
 func (d *Discovery) Start() {
 	// Load topology from database first
 	d.LoadTopologyFromDatabase()
-	
+
 	d.ticker = time.NewTicker(d.conn.config.KeepaliveInterval)
 
-	go d.sendKeepAlives()
+	go d.sendKeepAlivesWithDelay()
 	go d.listenForKeepAlives()
 	go d.cleanupStaleNodes()
+}
+
+func (d *Discovery) sendKeepAlivesWithDelay() {
+	// Wait for the configured initial delay before sending first keepalive
+	log.Debug("[DISCOVERY DEBUG] Waiting %v before sending first keepalive", d.conn.config.FirstKeepaliveDelay)
+	time.Sleep(d.conn.config.FirstKeepaliveDelay)
+
+	// Now start regular keepalive sending
+	d.sendKeepAlives()
 }
 
 func (d *Discovery) sendKeepAlives() {
@@ -156,7 +165,7 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 		}
 		d.channels[channel][keepAlive.NodeID] = mode
 		log.Debug("[DISCOVERY DEBUG] Node '%s' registered on channel '%s' with mode %d", keepAlive.NodeID, channel, mode)
-		
+
 		// Save to database immediately
 		modeStr := ""
 		switch mode {
@@ -167,10 +176,10 @@ func (d *Discovery) handleKeepAlive(data []byte) {
 		case RW:
 			modeStr = "rw"
 		}
-		
+
 		if modeStr != "" {
 			if err := d.conn.db.SaveTopologyNode(keepAlive.NodeID, channel, modeStr, true); err != nil {
-				log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v", 
+				log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v",
 					keepAlive.NodeID, channel, err)
 			}
 		}
@@ -194,12 +203,12 @@ func (d *Discovery) cleanupStaleNodes() {
 			for nodeID, node := range d.nodes {
 				if node.LastSeen.Before(cutoff) {
 					log.Debug("[DISCOVERY DEBUG] Node %s is now offline", nodeID)
-					
+
 					// Mark node as offline in database instead of deleting
 					if err := d.conn.db.UpdateNodeStatus(nodeID, false); err != nil {
 						log.Error("[DISCOVERY DEBUG] Error marking node %s as offline: %v", nodeID, err)
 					}
-					
+
 					delete(d.nodes, nodeID)
 
 					for channel := range d.channels {
@@ -232,7 +241,7 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 
 	nodes := []string{}
 	log.Debug("[DISCOVERY DEBUG] GetChannelNodes: Looking for nodes on channel '%s'", channel)
-	
+
 	// First try in-memory discovery
 	if channelNodes, exists := d.channels[channel]; exists {
 		log.Debug("[DISCOVERY DEBUG] Channel '%s' has nodes: %+v", channel, channelNodes)
@@ -250,7 +259,7 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 			}
 		}
 	}
-	
+
 	// Fallback to database when no receivers found in memory
 	if len(nodes) == 0 {
 		log.Debug("[DISCOVERY DEBUG] No receivers found in memory for channel '%s', checking database", channel)
@@ -263,7 +272,7 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 			log.Debug("[DISCOVERY DEBUG] No nodes found in database for channel '%s'", channel)
 		}
 	}
-	
+
 	log.Debug("[DISCOVERY DEBUG] GetChannelNodes returning %d nodes: %v", len(nodes), nodes)
 	return nodes
 }
@@ -347,7 +356,7 @@ func (d *Discovery) GetTopology() map[string]interface{} {
 // LoadTopologyFromDatabase loads the topology from SQLite database on startup
 func (d *Discovery) LoadTopologyFromDatabase() {
 	log.Debug("[DISCOVERY DEBUG] Loading topology from database")
-	
+
 	nodes, err := d.conn.db.GetTopologyNodes()
 	if err != nil {
 		log.Error("[DISCOVERY DEBUG] Error loading topology from database: %v", err)
@@ -359,7 +368,7 @@ func (d *Discovery) LoadTopologyFromDatabase() {
 
 	for _, topologyNode := range nodes {
 		nodeID := topologyNode.NodeID
-		
+
 		// Create or update node info
 		node, exists := d.nodes[nodeID]
 		if !exists {
@@ -369,9 +378,9 @@ func (d *Discovery) LoadTopologyFromDatabase() {
 			}
 			d.nodes[nodeID] = node
 		}
-		
+
 		node.LastSeen = topologyNode.LastSeen
-		
+
 		// Parse mode string to ChannelMode
 		var mode ChannelMode
 		switch topologyNode.Mode {
@@ -384,22 +393,22 @@ func (d *Discovery) LoadTopologyFromDatabase() {
 		default:
 			continue
 		}
-		
+
 		node.Channels[topologyNode.Channel] = mode
-		
+
 		// Update channels map
 		if d.channels[topologyNode.Channel] == nil {
 			d.channels[topologyNode.Channel] = make(map[string]ChannelMode)
 		}
-		
+
 		// Only include if node was alive when stored
 		if topologyNode.IsAlive {
 			d.channels[topologyNode.Channel][nodeID] = mode
-			log.Debug("[DISCOVERY DEBUG] Loaded node '%s' on channel '%s' with mode %s", 
+			log.Debug("[DISCOVERY DEBUG] Loaded node '%s' on channel '%s' with mode %s",
 				nodeID, topologyNode.Channel, topologyNode.Mode)
 		}
 	}
-	
+
 	log.Debug("[DISCOVERY DEBUG] Loaded %d topology nodes from database", len(nodes))
 }
 
@@ -407,15 +416,15 @@ func (d *Discovery) LoadTopologyFromDatabase() {
 func (d *Discovery) SaveTopologyToDatabase() {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	
+
 	for nodeID, node := range d.nodes {
 		isAlive := d.IsNodeAlive(nodeID)
-		
+
 		// Update node status first
 		if err := d.conn.db.UpdateNodeStatus(nodeID, isAlive); err != nil {
 			log.Error("[DISCOVERY DEBUG] Error updating node status for %s: %v", nodeID, err)
 		}
-		
+
 		// Save each channel this node participates in
 		for channel, mode := range node.Channels {
 			modeStr := ""
@@ -427,10 +436,10 @@ func (d *Discovery) SaveTopologyToDatabase() {
 			case RW:
 				modeStr = "rw"
 			}
-			
+
 			if modeStr != "" {
 				if err := d.conn.db.SaveTopologyNode(nodeID, channel, modeStr, isAlive); err != nil {
-					log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v", 
+					log.Error("[DISCOVERY DEBUG] Error saving topology node %s/%s: %v",
 						nodeID, channel, err)
 				}
 			}

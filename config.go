@@ -13,6 +13,7 @@ type Config struct {
 	EnableCompression          bool          // Enable Snappy compression for message payloads
 	StoragePath                string        // Path to SQLite database file (supports {nodeID} placeholder)
 	EnableDebugLogging         bool          // Enable debug logging output
+	FirstKeepaliveDelay        time.Duration // Delay before sending first keepalive message
 	KeepaliveInterval          time.Duration // How often to send keepalive messages
 	MessageExpiry              time.Duration // Default expiry time for messages if not specified
 	NodeOfflineTimeout         time.Duration // Time to wait before considering a node offline
@@ -37,6 +38,7 @@ func DefaultConfig() *Config {
 		EnableCompression:          true,
 		StoragePath:                "./rmds-{nodeID}.db",
 		EnableDebugLogging:         false,
+		FirstKeepaliveDelay:        3 * time.Second,
 		KeepaliveInterval:          10 * time.Second,
 		MessageExpiry:              24 * time.Hour,
 		NodeOfflineTimeout:         30 * time.Second,

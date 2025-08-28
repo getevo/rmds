@@ -62,6 +62,19 @@ type Message struct {
 	Data      []byte    `json:"data"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+
+	// Internal fields for ACK handling (not serialized)
+	channel *Channel `json:"-"`
+	acked   bool     `json:"-"`
+}
+
+// Ack manually acknowledges the message receipt
+func (m *Message) Ack() {
+	if m.acked || m.channel == nil {
+		return // Already acked or no channel reference
+	}
+	m.acked = true
+	m.channel.sendAck(m.ID, m.Sender)
 }
 
 type MessageHandler func(*Message)
@@ -335,7 +348,8 @@ func (ch *Channel) handleMessage(data []byte) {
 
 	ch.conn.statistics.IncrementProcessed()
 
-	ch.sendAck(msg.ID, msg.Sender)
+	// Set channel reference for manual ACK
+	msg.channel = ch
 
 	ch.mu.RLock()
 	handlers := make([]MessageHandler, len(ch.handlers))
