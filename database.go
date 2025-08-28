@@ -404,6 +404,35 @@ func (d *Database) GetAliveNodesForChannel(channel string) ([]string, error) {
 	return nodes, rows.Err()
 }
 
+// GetAllNodesForChannel returns all nodes (alive and offline) that have ever been on a channel
+func (d *Database) GetAllNodesForChannel(channel string) ([]string, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	query := `
+	SELECT DISTINCT node_id
+	FROM topology
+	WHERE channel = ? AND mode IN ('reader', 'rw')
+	ORDER BY last_seen DESC
+	`
+	rows, err := d.db.Query(query, channel)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []string
+	for rows.Next() {
+		var nodeID string
+		if err := rows.Scan(&nodeID); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, nodeID)
+	}
+
+	return nodes, rows.Err()
+}
+
 func (d *Database) GetAllAliveNodes() ([]string, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

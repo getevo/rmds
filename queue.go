@@ -91,6 +91,30 @@ func (q *MessageQueue) getOrCreateConsumer(receiver string) *MessageConsumer {
 	return consumer
 }
 
+// shouldRetryToReceiver checks if we should retry delivery to a receiver
+// based on last seen time (must be within KeepaliveInterval * 2)
+func (c *MessageConsumer) shouldRetryToReceiver() bool {
+	discovery := c.queue.conn.discovery
+	discovery.mu.RLock()
+	defer discovery.mu.RUnlock()
+	
+	node, exists := discovery.nodes[c.receiver]
+	if !exists {
+		// Node not discovered yet - check database for topology
+		return discovery.conn.db.IsNodeAlive(c.receiver)
+	}
+	
+	// Check if node was seen recently enough to retry delivery
+	maxOfflineTime := c.queue.conn.config.KeepaliveInterval * 2
+	timeSinceLastSeen := time.Since(node.LastSeen)
+	
+	shouldRetry := timeSinceLastSeen <= maxOfflineTime
+	log.Debug("[CONSUMER DEBUG] Node %s last seen %v ago, max offline time %v, should retry: %v", 
+		c.receiver, timeSinceLastSeen, maxOfflineTime, shouldRetry)
+	
+	return shouldRetry
+}
+
 // run is the main consumer loop - reads one message, sends it, waits for ACK, repeat
 func (c *MessageConsumer) run() {
 	defer c.queue.wg.Done()
@@ -157,9 +181,9 @@ func (c *MessageConsumer) processNextMessage() bool {
 		return true
 	}
 	
-	// Check if receiver is alive
-	if !c.queue.conn.discovery.IsNodeAlive(c.receiver) {
-		log.Debug("[CONSUMER DEBUG] Receiver %s is not alive, waiting", c.receiver)
+	// Check if receiver should receive retries based on last seen time
+	if !c.shouldRetryToReceiver() {
+		log.Debug("[CONSUMER DEBUG] Receiver %s offline too long, pausing retries", c.receiver)
 		time.Sleep(5 * time.Second)
 		return true
 	}

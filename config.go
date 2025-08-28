@@ -38,7 +38,7 @@ func DefaultConfig() *Config {
 		EnableCompression:          true,
 		StoragePath:                "./rmds-{nodeID}.db",
 		EnableDebugLogging:         false,
-		FirstKeepaliveDelay:        3 * time.Second,
+		FirstKeepaliveDelay:        1 * time.Second,
 		KeepaliveInterval:          10 * time.Second,
 		MessageExpiry:              24 * time.Hour,
 		NodeOfflineTimeout:         30 * time.Second,

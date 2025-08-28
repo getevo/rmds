@@ -248,12 +248,10 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 		for nodeID, mode := range channelNodes {
 			log.Debug("[DISCOVERY DEBUG] Node '%s' has mode %d (ReadOnly=%d, RW=%d)", nodeID, mode, ReadOnly, RW)
 			if mode == ReadOnly || mode == RW {
-				if d.IsNodeAlive(nodeID) {
-					log.Debug("[DISCOVERY DEBUG] Adding alive node '%s' to target list", nodeID)
-					nodes = append(nodes, nodeID)
-				} else {
-					log.Debug("[DISCOVERY DEBUG] Node '%s' is not alive", nodeID)
-				}
+				// Always include receivers in target list for message queuing
+				// Even offline receivers should get messages queued for reliable delivery
+				log.Debug("[DISCOVERY DEBUG] Adding node '%s' to target list (alive=%v)", nodeID, d.IsNodeAlive(nodeID))
+				nodes = append(nodes, nodeID)
 			} else {
 				log.Debug("[DISCOVERY DEBUG] Node '%s' mode %d is not ReadOnly or RW", nodeID, mode)
 			}
@@ -263,7 +261,7 @@ func (d *Discovery) GetChannelNodes(channel string) []string {
 	// Fallback to database when no receivers found in memory
 	if len(nodes) == 0 {
 		log.Debug("[DISCOVERY DEBUG] No receivers found in memory for channel '%s', checking database", channel)
-		if dbNodes, err := d.conn.db.GetAliveNodesForChannel(channel); err == nil && len(dbNodes) > 0 {
+		if dbNodes, err := d.conn.db.GetAllNodesForChannel(channel); err == nil && len(dbNodes) > 0 {
 			nodes = dbNodes
 			log.Debug("[DISCOVERY DEBUG] Found %d nodes in database for channel '%s': %v", len(nodes), channel, nodes)
 		} else if err != nil {
